@@ -107,10 +107,18 @@ jobs:
               require(p.scheme == "https" and p.netloc == host and p.fragment == ""
                       and re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+actions\.githubusercontent\.com",
                                        host) is not None
-                      and p.path.startswith("/_apis/") and not p.path.startswith("//"),
+                      and not p.path.startswith("//"),
                       "provider origin or path not approved")
-              query = parse_qsl(p.query, keep_blank_values=True, max_num_fields=32)
-              require(not any(k.casefold() == "audience" for k, _ in query), "unexpected provider audience input")
+              # Exact route grammar: root or two scoped segments on regional pipelines.
+              # No percent encoding, extra segments, dot traversal or substring matching.
+              guid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+              route = rf"/_apis/distributedtask/hubs/Actions/plans/{guid}/jobs/{guid}/idtoken"
+              root = re.fullmatch(route, p.path) is not None
+              regional = (re.fullmatch(r"pipelinesghub[a-z0-9]{1,32}\.actions\.githubusercontent\.com", host) is not None
+                          and re.fullmatch(rf"/[A-Za-z0-9_-]{{1,128}}/{guid}" + route, p.path) is not None)
+              require(root or regional, "provider route not approved")
+              # Only the observed API version, with no encoded/duplicate/credential keys.
+              require(p.query in ("", "api-version=2.0"), "provider query not approved")
               return urlunsplit((p.scheme, host, p.path,
                                  (p.query + "&" if p.query else "") + urlencode({"audience": AUDIENCE}), ""))
 
@@ -183,14 +191,36 @@ jobs:
           def collect(env, pin, fetch=tls_fetch, now=time.time):
               # Gate first even for all internal callers; tests use the stage functions
               # directly with synthetic arguments, never invoke the live transport.
-              require(RELEASED is True, "claim lane is disabled")
-              run_id, caller_sha = runner_context(env, pin)
-              url = provider_url(env.get("ACTIONS_ID_TOKEN_REQUEST_URL"))
-              bearer = env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-              require(type(bearer) is str and 0 < len(bearer) <= MAX
-                      and re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", bearer) is not None,
-                      "invalid runner request credential")
-              return receipt(claims_from_body(fetch(url, bearer)), run_id, caller_sha, pin, int(now()))
+              stage = "GATE"
+              try:
+                  require(RELEASED is True, "claim lane is disabled")
+                  stage = "CONTEXT"
+                  run_id, caller_sha = runner_context(env, pin)
+                  stage = "PROVIDER_URL"
+                  url = provider_url(env.get("ACTIONS_ID_TOKEN_REQUEST_URL"))
+                  stage = "REQUEST_CREDENTIAL"
+                  bearer = env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+                  require(type(bearer) is str and 0 < len(bearer) <= MAX
+                          and re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", bearer) is not None,
+                          "invalid runner request credential")
+                  stage = "TRANSPORT"
+                  body = fetch(url, bearer)
+                  stage = "ASSERTION"
+                  claims = claims_from_body(body)
+                  stage = "CLAIMS"
+                  return receipt(claims, run_id, caller_sha, pin, int(now()))
+              except Exception:
+                  raise StageFailure(stage) from None
+
+
+          FAILURE_STAGES = frozenset({"GATE", "CONTEXT", "PROVIDER_URL", "REQUEST_CREDENTIAL",
+                                      "TRANSPORT", "ASSERTION", "CLAIMS", "INTERNAL"})
+
+
+          class StageFailure(Refused):
+              def __init__(self, stage):
+                  self.stage = stage if stage in FAILURE_STAGES else "INTERNAL"
+                  super().__init__(self.stage)
 
 
           def main():
@@ -198,9 +228,10 @@ jobs:
                   result = collect(os.environ, ACTOR_ID)
                   print("STORAGE_OIDC_RECEIPT " + json.dumps(result, sort_keys=True, separators=(",", ":")))
                   return 0
-              except Exception:
-                  # No exception details at this boundary, even for urllib or JSON errors.
-                  print("STOP: claim proof disabled or refused", file=sys.stderr)
+              except Exception as exc:
+                  # Only fixed codes; never exception text, URL, credential or claim values.
+                  stage = exc.stage if type(exc) is StageFailure and exc.stage in FAILURE_STAGES else "INTERNAL"
+                  print("STOP: claim proof refused stage=" + stage, file=sys.stderr)
                   return 78
 
 
