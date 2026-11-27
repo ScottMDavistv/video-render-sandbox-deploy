@@ -1,0 +1,11 @@
+# Offline future caller specimen. Do not rename, install or execute.
+name: Storage GitHub claim receipt (offline exact-pin specimen)
+'on':
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  claim-proof:
+    if: ${{ github.repository_id == '1473464013' && github.repository_owner_id == '212811615' && github.actor_id == '361711200' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' && github.event_name == 'workflow_dispatch' && github.run_attempt == '1' && github.workflow_ref == 'ScottMDavistv/video-render-sandbox-deploy/.github/workflows/oidc-proof-caller.yml@refs/heads/main' }}
+    permissions:
+      id-token: write
+    uses: ScottMDavistv/video-render-sandbox-deploy/.github/workflows/oidc-proof-reusable.yml@5c91fb3bc1f5ffc04af51eebeae9f055063e918e
