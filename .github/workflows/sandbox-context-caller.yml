@@ -1,0 +1,17 @@
+name: Inert sandbox caller-context specimen
+on:
+  workflow_dispatch:
+    inputs:
+      proof_tag:
+        description: Fixed non-secret proof tag
+        type: choice
+        required: true
+        options: [caller-context-v1]
+        default: caller-context-v1
+permissions: {}
+jobs:
+  context_proof:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == '1' && github.repository_id == '1473464013' && github.actor == 'ScottMDavistv' && github.actor_id == '212811615' && github.triggering_actor == 'ScottMDavistv' && github.event.inputs.proof_tag == 'caller-context-v1' }}
+    permissions:
+      actions: read
+    uses: ScottMDavistv/video-render-sandbox-deploy/.github/workflows/sandbox-context-callee.yml@713ef7b126c7152c57c3a4ce974f161b84dbeb41
