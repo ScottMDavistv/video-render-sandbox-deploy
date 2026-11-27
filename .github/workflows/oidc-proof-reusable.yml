@@ -1,0 +1,209 @@
+# Offline notional callee specimen. Do not rename, install or execute.
+name: Storage GitHub reusable claim receipt (offline specimen)
+'on':
+  workflow_call: {}
+permissions: {}
+jobs:
+  claim-proof:
+    if: ${{ github.repository_id == '1473464013' && github.repository_owner_id == '212811615' && github.actor_id == '361711200' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' && github.event_name == 'workflow_dispatch' && github.run_attempt == '1' && github.workflow_ref == 'ScottMDavistv/video-render-sandbox-deploy/.github/workflows/oidc-proof-caller.yml@refs/heads/main' }}
+    permissions:
+      id-token: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    environment: video-render-media-oidc-proof
+    steps:
+      - name: Capture GitHub claims only (notional)
+        shell: bash
+        run: |
+          /usr/bin/python3 -I -B - <<'CLAIM_RECEIPT_PY'
+          """Offline callee specimen only. No Azure exchange capability."""
+          import base64
+          import json
+          import os
+          import re
+          import ssl
+          import sys
+          import time
+          from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+          import urllib.request
+
+          RELEASED = True  # NOTIONAL specimen; not installed or authorized for execution
+          APP_ID = "5942776"  # external App-to-bot binding; not a JWT claim
+          ACTOR_ID = "361711200"  # owner-supplied numeric bot ID; no login guessed
+          OWNER_ID = "212811615"
+          REPO_ID = "1473464013"
+          REPO = "ScottMDavistv/video-render-sandbox-deploy"
+          ENVIRONMENT = "video-render-media-oidc-proof"
+          CALLER = f"{REPO}/.github/workflows/oidc-proof-caller.yml@refs/heads/main"
+          CALLEE = f"{REPO}/.github/workflows/oidc-proof-reusable.yml@"
+          ISSUER = "https://token.actions.githubusercontent.com"
+          AUDIENCE = "api://AzureADTokenExchange"
+          MAX = 32768
+          SHA = re.compile(r"[0-9a-f]{40}")
+          NUMBER = re.compile(r"[1-9][0-9]{0,24}")
+          SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
+          class Refused(ValueError):
+              pass
+
+
+          def require(ok, label):
+              if not ok:
+                  raise Refused(label)  # all labels are constants or fixed field names
+
+
+          def number(value):
+              return type(value) is str and NUMBER.fullmatch(value) is not None
+
+
+          def sha(value):
+              return type(value) is str and SHA.fullmatch(value) is not None and value != "0" * 40
+
+
+          def unique_pairs(items):
+              out = {}
+              for key, value in items:
+                  require(key not in out, "duplicate JSON key")
+                  out[key] = value
+              return out
+
+
+          def object_json(data):
+              value = json.loads(data, object_pairs_hook=unique_pairs)
+              require(type(value) is dict, "JSON object required")
+              return value
+
+
+          def runner_context(env, pin):
+              require(number(pin) and pin not in (OWNER_ID, "361667965"), "initiator pin not released")
+              fixed = {
+                  "GITHUB_ACTIONS": "true",
+                  "RUNNER_ENVIRONMENT": "github-hosted",
+                  "GITHUB_REPOSITORY": REPO,
+                  "GITHUB_REPOSITORY_ID": REPO_ID,
+                  "GITHUB_REPOSITORY_OWNER_ID": OWNER_ID,
+                  "GITHUB_ACTOR_ID": pin,
+                  "GITHUB_REF": "refs/heads/main",
+                  "GITHUB_REF_TYPE": "branch",
+                  "GITHUB_EVENT_NAME": "workflow_dispatch",
+                  "GITHUB_RUN_ATTEMPT": "1",
+                  "GITHUB_WORKFLOW_REF": CALLER,
+              }
+              for key, expected in fixed.items():
+                  require(env.get(key) == expected, "runner context mismatch: " + key)
+              run_id = env.get("GITHUB_RUN_ID")
+              caller_sha = env.get("GITHUB_SHA")
+              require(number(run_id) and sha(caller_sha), "invalid run identity")
+              return run_id, caller_sha
+
+
+          def provider_url(raw):
+              require(type(raw) is str and 1 <= len(raw) <= 4096
+                      and all(33 <= ord(c) <= 126 for c in raw)
+                      and "\\" not in raw, "invalid provider URL")
+              p = urlsplit(raw)
+              host = p.hostname or ""
+              require(p.scheme == "https" and p.netloc == host and p.fragment == ""
+                      and re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+actions\.githubusercontent\.com",
+                                       host) is not None
+                      and p.path.startswith("/_apis/") and not p.path.startswith("//"),
+                      "provider origin or path not approved")
+              query = parse_qsl(p.query, keep_blank_values=True, max_num_fields=32)
+              require(not any(k.casefold() == "audience" for k, _ in query), "unexpected provider audience input")
+              return urlunsplit((p.scheme, host, p.path,
+                                 (p.query + "&" if p.query else "") + urlencode({"audience": AUDIENCE}), ""))
+
+
+          class RejectRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+
+          def tls_fetch(url, bearer):
+              # Exactly one GET to the checked GitHub origin. No proxies, redirects or
+              # credential on argv, and no server response/error logging.
+              opener = urllib.request.build_opener(
+                  urllib.request.ProxyHandler({}),
+                  urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+                  RejectRedirect(),
+              )
+              req = urllib.request.Request(url, headers={
+                  "Authorization": "Bearer " + bearer, "Accept": "application/json",
+                  "User-Agent": "storage-oidc-claim-proof",
+              }, method="GET")
+              with opener.open(req, timeout=8) as response:
+                  require(response.status == 200, "GitHub provider did not return success")
+                  return response.read(MAX + 1)
+
+
+          def claims_from_body(body):
+              require(type(body) is bytes and 0 < len(body) <= MAX, "invalid provider response length")
+              token = object_json(body).get("value")
+              require(type(token) is str and len(token) <= MAX, "missing provider assertion")
+              items = token.split(".")
+              require(len(items) == 3 and all(SEGMENT.fullmatch(x) for x in items), "invalid assertion encoding")
+
+              def decode(s):
+                  return base64.b64decode(s + "=" * (-len(s) % 4), altchars=b"-_", validate=True)
+
+              header = object_json(decode(items[0]))
+              require(header.get("alg") == "RS256" and type(header.get("kid")) is str
+                      and 0 < len(header["kid"]) < 256, "unexpected assertion header")
+              # Claim observation over authenticated TLS only. This is not signature validation.
+              return object_json(decode(items[1]))
+
+
+          def receipt(claims, run_id, caller_sha, pin, now):
+              require(type(claims) is dict, "missing claims object")
+              callee_sha = claims.get("job_workflow_sha")
+              require(sha(callee_sha), "missing immutable reusable workflow SHA")
+              callee = CALLEE + callee_sha
+              expected_sub = (f"repo:ScottMDavistv@{OWNER_ID}/video-render-sandbox-deploy@{REPO_ID}:"
+                              f"environment:{ENVIRONMENT}")
+              expected = {
+                  "iss": ISSUER, "aud": AUDIENCE, "sub": expected_sub,
+                  "repository": REPO, "repository_id": REPO_ID, "repository_owner_id": OWNER_ID,
+                  "environment": ENVIRONMENT, "ref": "refs/heads/main", "ref_type": "branch",
+                  "event_name": "workflow_dispatch", "actor_id": pin,
+                  "run_id": run_id, "run_attempt": "1", "workflow_ref": CALLER,
+                  "workflow_sha": caller_sha, "job_workflow_ref": callee,
+                  "job_workflow_sha": callee_sha, "runner_environment": "github-hosted",
+              }
+              for key, wanted in expected.items():
+                  actual = claims.get(key)
+                  require(type(actual) is str and actual == wanted, "claim mismatch: " + key)
+              iat, exp, nbf = (claims.get(k) for k in ("iat", "exp", "nbf"))
+              require(all(type(t) is int for t in (iat, exp, nbf))
+                      and now - 300 <= iat <= now + 30 and nbf <= now + 30
+                      and now < exp <= iat + 600, "assertion outside time window")
+              return {"status": "CLAIM_RECEIPT_ONLY", **expected}
+
+
+          def collect(env, pin, fetch=tls_fetch, now=time.time):
+              # Gate first even for all internal callers; tests use the stage functions
+              # directly with synthetic arguments, never invoke the live transport.
+              require(RELEASED is True, "claim lane is disabled")
+              run_id, caller_sha = runner_context(env, pin)
+              url = provider_url(env.get("ACTIONS_ID_TOKEN_REQUEST_URL"))
+              bearer = env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+              require(type(bearer) is str and 0 < len(bearer) <= MAX
+                      and re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", bearer) is not None,
+                      "invalid runner request credential")
+              return receipt(claims_from_body(fetch(url, bearer)), run_id, caller_sha, pin, int(now()))
+
+
+          def main():
+              try:
+                  result = collect(os.environ, ACTOR_ID)
+                  print("STORAGE_OIDC_RECEIPT " + json.dumps(result, sort_keys=True, separators=(",", ":")))
+                  return 0
+              except Exception:
+                  # No exception details at this boundary, even for urllib or JSON errors.
+                  print("STOP: claim proof disabled or refused", file=sys.stderr)
+                  return 78
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          CLAIM_RECEIPT_PY
